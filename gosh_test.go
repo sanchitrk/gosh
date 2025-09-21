@@ -12,15 +12,9 @@ import (
 
 // logEntry is used to unmarshal the JSON log output for verification.
 type logEntry struct {
-	Timestamp int64    `json:"timestamp"`
-	Level     string   `json:"level"`
-	Msg       string   `json:"msg"`
-	Command   string   `json:"command,omitempty"`
-	Args      []string `json:"args,omitempty"`
-	Dir       string   `json:"dir,omitempty"`
-	Stdout    string   `json:"stdout,omitempty"`
-	Stderr    string   `json:"stderr,omitempty"`
-	Error     string   `json:"error,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+	Level     string `json:"level"`
+	Msg       string `json:"msg"`
 }
 
 // captureOutput captures everything written to os.Stdout during the execution of a function.
@@ -118,42 +112,27 @@ func TestNewBuilderPattern(t *testing.T) {
 				t.Errorf("expected stdout %q, but got %q", tc.expectedOut, output)
 			}
 
-			// Parse and verify log entries
-			lines := strings.Split(strings.TrimSpace(logOutput), "\n")
-			if len(lines) < 2 {
-				t.Fatalf("expected at least 2 log lines, got %d: %v", len(lines), lines)
+			// Parse and verify log entry - should be a single info log with the output
+			if strings.TrimSpace(logOutput) == "" {
+				// Some commands might not produce output, that's OK
+				return
 			}
 
-			// First log should be the "executing command" log
-			var execEntry logEntry
-			if err := json.Unmarshal([]byte(lines[0]), &execEntry); err != nil {
-				t.Fatalf("failed to unmarshal execution log: %v\nLog was: %s", err, lines[0])
+			var entry logEntry
+			if err := json.Unmarshal([]byte(strings.TrimSpace(logOutput)), &entry); err != nil {
+				t.Fatalf("failed to unmarshal log output: %v\nLog was: %s", err, logOutput)
 			}
 
-			if execEntry.Level != "info" {
-				t.Errorf("expected execution log level 'info', got %q", execEntry.Level)
+			if entry.Level != "info" {
+				t.Errorf("expected log level 'info', got %q", entry.Level)
 			}
 
-			if execEntry.Msg != "executing command" {
-				t.Errorf("expected execution log msg 'executing command', got %q", execEntry.Msg)
+			if entry.Msg != tc.expectedOut {
+				t.Errorf("expected log msg %q, got %q", tc.expectedOut, entry.Msg)
 			}
 
-			// Second log should be the completion log
-			var completionEntry logEntry
-			if err := json.Unmarshal([]byte(lines[1]), &completionEntry); err != nil {
-				t.Fatalf("failed to unmarshal completion log: %v\nLog was: %s", err, lines[1])
-			}
-
-			if completionEntry.Level != "info" {
-				t.Errorf("expected completion log level 'info', got %q", completionEntry.Level)
-			}
-
-			if completionEntry.Msg != "command completed successfully" {
-				t.Errorf("expected completion log msg 'command completed successfully', got %q", completionEntry.Msg)
-			}
-
-			if completionEntry.Stdout != tc.expectedOut {
-				t.Errorf("expected log stdout %q, got %q", tc.expectedOut, completionEntry.Stdout)
+			if entry.Timestamp == 0 {
+				t.Error("expected timestamp to be set in log, but it was zero")
 			}
 		})
 	}
@@ -173,28 +152,20 @@ func TestExecFailure(t *testing.T) {
 		t.Fatal("expected command to fail, but it succeeded")
 	}
 
-	// Parse log entries
-	lines := strings.Split(strings.TrimSpace(logOutput), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 log lines, got %d", len(lines))
-	}
-
-	// Last log should be the error log
+	// Parse log entry - should be an error log with stderr
 	var errorEntry logEntry
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &errorEntry); err != nil {
-		t.Fatalf("failed to unmarshal error log: %v\nLog was: %s", err, lines[len(lines)-1])
+	if err := json.Unmarshal([]byte(strings.TrimSpace(logOutput)), &errorEntry); err != nil {
+		t.Fatalf("failed to unmarshal error log: %v\nLog was: %s", err, logOutput)
 	}
 
 	if errorEntry.Level != "error" {
 		t.Errorf("expected log level 'error', but got %q", errorEntry.Level)
 	}
 
-	if errorEntry.Msg != "command failed" {
-		t.Errorf("expected log msg 'command failed', but got %q", errorEntry.Msg)
-	}
-
-	if errorEntry.Command != "ls" {
-		t.Errorf("expected command to be 'ls', got %q", errorEntry.Command)
+	// The exact stderr message can vary by OS, so we check for common patterns
+	if !strings.Contains(errorEntry.Msg, "No such file or directory") && 
+	   !strings.Contains(errorEntry.Msg, "cannot access") {
+		t.Errorf("expected log msg to contain file not found error, but got %q", errorEntry.Msg)
 	}
 }
 

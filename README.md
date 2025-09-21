@@ -201,34 +201,23 @@ go run cmd/srv/srv.go
 
 ## Log Structure
 
-All logs are structured JSON with the following fields:
+All logs use a clean, simplified JSON format:
 
+**INFO logs** (stdout):
 ```json
-{
-  "level": "info",
-  "timestamp": 1699123456,
-  "msg": "command completed successfully",
-  "command": "ls",
-  "args": ["-la", "/tmp"],
-  "dir": "/tmp",
-  "env": ["CUSTOM_VAR=value"],
-  "stdout": "command output here"
-}
+{"timestamp": 1758477507, "level": "info", "msg": "Hello from stdout!"}
 ```
 
-Error logs include additional fields:
-
+**ERROR logs** (stderr):
 ```json
-{
-  "level": "error",
-  "timestamp": 1699123456,
-  "msg": "command failed",
-  "command": "nonexistent-cmd",
-  "args": [],
-  "stderr": "command not found",
-  "error": "exit status 127"
-}
+{"timestamp": 1758477507, "level": "error", "msg": "ls: non-existent-dir: No such file or directory"}
 ```
+
+Key points:
+- **stdout** is logged as **INFO** level with the actual command output as the message
+- **stderr** is logged as **ERROR** level with the actual error output as the message
+- No extra metadata cluttering the logs - just timestamp, level, and the actual output
+- Both stdout and stderr are logged regardless of command success/failure
 
 ## HTTP Streaming Implementation
 

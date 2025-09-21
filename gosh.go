@@ -192,47 +192,24 @@ func (s *Shell) Exec() (string, error) {
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	// Log the command being executed
-	s.log.Info().
-		Str("command", s.command).
-		Strs("args", s.args).
-		Str("dir", s.dir).
-		Strs("env", s.env).
-		Msg("executing command")
+
 
 	err := cmd.Run()
 
 	stdout := strings.TrimSpace(stdoutBuf.String())
 	stderr := strings.TrimSpace(stderrBuf.String())
 
-	if err != nil {
-		// On error, log stderr as the error message.
-		if stderr != "" {
-			s.log.Error().
-				Str("command", s.command).
-				Strs("args", s.args).
-				Str("stderr", stderr).
-				Err(err).
-				Msg("command failed")
-		} else {
-			// Fallback if stderr is empty but an error still occurred
-			s.log.Error().
-				Str("command", s.command).
-				Strs("args", s.args).
-				Err(err).
-				Msg("command failed without stderr output")
-		}
-		return stdout, err
+	// Always log stderr if present (even on success, some commands write to stderr)
+	if stderr != "" {
+		s.log.Error().Msg(stderr)
 	}
 
-	// On success, log stdout as the info message.
-	s.log.Info().
-		Str("command", s.command).
-		Strs("args", s.args).
-		Str("stdout", stdout).
-		Msg("command completed successfully")
+	// Always log stdout if present
+	if stdout != "" {
+		s.log.Info().Msg(stdout)
+	}
 
-	return stdout, nil
+	return stdout, err
 }
 
 // Legacy constructor for backward compatibility
