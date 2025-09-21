@@ -12,9 +12,15 @@ import (
 
 // logEntry is used to unmarshal the JSON log output for verification.
 type logEntry struct {
-	Timestamp int64  `json:"timestamp"`
-	Level     string `json:"level"`
-	Msg       string `json:"msg"`
+	Timestamp int64    `json:"timestamp"`
+	Level     string   `json:"level"`
+	Msg       string   `json:"msg"`
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"args,omitempty"`
+	Dir       string   `json:"dir,omitempty"`
+	Stdout    string   `json:"stdout,omitempty"`
+	Stderr    string   `json:"stderr,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // captureOutput captures everything written to os.Stdout during the execution of a function.
@@ -37,32 +43,54 @@ func captureOutput(f func()) string {
 	return buf.String()
 }
 
-func TestExecSuccess(t *testing.T) {
-	ConfigureGlobals() // Ensure our JSON log format is set
+func TestNewBuilderPattern(t *testing.T) {
+	ConfigureGlobals()
 
 	testCases := []struct {
-		name             string
-		shell            *Shell
-		expectedOut      string
-		expectedLogLevel string
+		name        string
+		setupShell  func() *Shell
+		expectedOut string
+		shouldError bool
 	}{
 		{
-			name:             "Simple Echo",
-			shell:            New("echo", "hello world"),
-			expectedOut:      "hello world",
-			expectedLogLevel: "info",
+			name: "First Arg sets command",
+			setupShell: func() *Shell {
+				return New().Arg("echo").Arg("hello")
+			},
+			expectedOut: "hello",
+			shouldError: false,
 		},
 		{
-			name:             "Chained Args",
-			shell:            New("echo").Arg("hello").Arg("gosh"),
-			expectedOut:      "hello gosh",
-			expectedLogLevel: "info",
+			name: "Args with first as command",
+			setupShell: func() *Shell {
+				return New().Args("echo", "hello", "world")
+			},
+			expectedOut: "hello world",
+			shouldError: false,
 		},
 		{
-			name:             "Slice of Args",
-			shell:            New("echo").Args("hello", "from", "args"),
-			expectedOut:      "hello from args",
-			expectedLogLevel: "info",
+			name: "Explicit Command method",
+			setupShell: func() *Shell {
+				return New().Command("echo").Arg("test")
+			},
+			expectedOut: "test",
+			shouldError: false,
+		},
+		{
+			name: "Mixed Command and Args",
+			setupShell: func() *Shell {
+				return New().Command("echo").Args("mixed", "test")
+			},
+			expectedOut: "mixed test",
+			shouldError: false,
+		},
+		{
+			name: "No command should error",
+			setupShell: func() *Shell {
+				return New().Dir("/tmp")
+			},
+			expectedOut: "",
+			shouldError: true,
 		},
 	}
 
@@ -72,8 +100,15 @@ func TestExecSuccess(t *testing.T) {
 			var err error
 
 			logOutput := captureOutput(func() {
-				output, err = tc.shell.Exec()
+				output, err = tc.setupShell().Exec()
 			})
+
+			if tc.shouldError {
+				if err == nil {
+					t.Fatal("expected command to fail, but it succeeded")
+				}
+				return
+			}
 
 			if err != nil {
 				t.Fatalf("expected command to succeed, but it failed: %v", err)
@@ -83,22 +118,42 @@ func TestExecSuccess(t *testing.T) {
 				t.Errorf("expected stdout %q, but got %q", tc.expectedOut, output)
 			}
 
-			// Verify the JSON log entry
-			var entry logEntry
-			if err := json.Unmarshal([]byte(logOutput), &entry); err != nil {
-				t.Fatalf("failed to unmarshal log output: %v\nLog was: %s", err, logOutput)
+			// Parse and verify log entries
+			lines := strings.Split(strings.TrimSpace(logOutput), "\n")
+			if len(lines) < 2 {
+				t.Fatalf("expected at least 2 log lines, got %d: %v", len(lines), lines)
 			}
 
-			if entry.Level != tc.expectedLogLevel {
-				t.Errorf("expected log level %q, but got %q", tc.expectedLogLevel, entry.Level)
+			// First log should be the "executing command" log
+			var execEntry logEntry
+			if err := json.Unmarshal([]byte(lines[0]), &execEntry); err != nil {
+				t.Fatalf("failed to unmarshal execution log: %v\nLog was: %s", err, lines[0])
 			}
 
-			if entry.Msg != tc.expectedOut {
-				t.Errorf("expected log msg to be the stdout %q, but got %q", tc.expectedOut, entry.Msg)
+			if execEntry.Level != "info" {
+				t.Errorf("expected execution log level 'info', got %q", execEntry.Level)
 			}
 
-			if entry.Timestamp == 0 {
-				t.Error("expected timestamp to be set in log, but it was zero")
+			if execEntry.Msg != "executing command" {
+				t.Errorf("expected execution log msg 'executing command', got %q", execEntry.Msg)
+			}
+
+			// Second log should be the completion log
+			var completionEntry logEntry
+			if err := json.Unmarshal([]byte(lines[1]), &completionEntry); err != nil {
+				t.Fatalf("failed to unmarshal completion log: %v\nLog was: %s", err, lines[1])
+			}
+
+			if completionEntry.Level != "info" {
+				t.Errorf("expected completion log level 'info', got %q", completionEntry.Level)
+			}
+
+			if completionEntry.Msg != "command completed successfully" {
+				t.Errorf("expected completion log msg 'command completed successfully', got %q", completionEntry.Msg)
+			}
+
+			if completionEntry.Stdout != tc.expectedOut {
+				t.Errorf("expected log stdout %q, got %q", tc.expectedOut, completionEntry.Stdout)
 			}
 		})
 	}
@@ -111,29 +166,35 @@ func TestExecFailure(t *testing.T) {
 
 	logOutput := captureOutput(func() {
 		// This command is guaranteed to fail
-		_, err = New("ls", "non-existent-dir-for-gosh-test").Exec()
+		_, err = New().Arg("ls").Arg("non-existent-dir-for-gosh-test").Exec()
 	})
 
 	if err == nil {
 		t.Fatal("expected command to fail, but it succeeded")
 	}
 
-	// Output might contain partial results, so we don't strictly check it.
-
-	// Verify the JSON log entry for the error
-	var entry logEntry
-	if err := json.Unmarshal([]byte(logOutput), &entry); err != nil {
-		t.Fatalf("failed to unmarshal log output: %v\nLog was: %s", err, logOutput)
+	// Parse log entries
+	lines := strings.Split(strings.TrimSpace(logOutput), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 log lines, got %d", len(lines))
 	}
 
-	if entry.Level != "error" {
-		t.Errorf("expected log level 'error', but got %q", entry.Level)
+	// Last log should be the error log
+	var errorEntry logEntry
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &errorEntry); err != nil {
+		t.Fatalf("failed to unmarshal error log: %v\nLog was: %s", err, lines[len(lines)-1])
 	}
 
-	// The exact stderr message can vary slightly by OS, so we check for a substring.
-	expectedErrMsg := "No such file or directory"
-	if !strings.Contains(entry.Msg, expectedErrMsg) {
-		t.Errorf("expected log msg to contain %q, but got %q", expectedErrMsg, entry.Msg)
+	if errorEntry.Level != "error" {
+		t.Errorf("expected log level 'error', but got %q", errorEntry.Level)
+	}
+
+	if errorEntry.Msg != "command failed" {
+		t.Errorf("expected log msg 'command failed', but got %q", errorEntry.Msg)
+	}
+
+	if errorEntry.Command != "ls" {
+		t.Errorf("expected command to be 'ls', got %q", errorEntry.Command)
 	}
 }
 
@@ -154,7 +215,7 @@ func TestExecInDir(t *testing.T) {
 	var err error
 
 	captureOutput(func() {
-		output, err = New("ls").Dir(tempDir).Exec()
+		output, err = New().Arg("ls").Dir(tempDir).Exec()
 	})
 
 	if err != nil {
@@ -180,7 +241,11 @@ func TestExecWithEnv(t *testing.T) {
 	var err error
 
 	captureOutput(func() {
-		output, err = New("sh", "-c", "echo $MY_TEST_VAR").Env("MY_TEST_VAR", expectedVar).Exec()
+		output, err = New().
+			Command("sh").
+			Args("-c", "echo $MY_TEST_VAR").
+			Env("MY_TEST_VAR", expectedVar).
+			Exec()
 	})
 
 	if err != nil {
@@ -189,5 +254,99 @@ func TestExecWithEnv(t *testing.T) {
 
 	if output != expectedVar {
 		t.Errorf("expected output to be the env var %q, but got %q", expectedVar, output)
+	}
+}
+
+func TestBuilderChaining(t *testing.T) {
+	ConfigureGlobals()
+
+	// Test complex chaining
+	var output string
+	var err error
+
+	captureOutput(func() {
+		output, err = New().
+			Command("echo").
+			Arg("hello").
+			Arg("builder").
+			Args("pattern", "test").
+			Exec()
+	})
+
+	if err != nil {
+		t.Fatalf("expected command to succeed, but it failed: %v", err)
+	}
+
+	expected := "hello builder pattern test"
+	if output != expected {
+		t.Errorf("expected output %q, got %q", expected, output)
+	}
+}
+
+func TestEmptyArgsHandling(t *testing.T) {
+	ConfigureGlobals()
+
+	// Test that empty Args() call doesn't break anything
+	var output string
+	var err error
+
+	captureOutput(func() {
+		output, err = New().
+			Args(). // Empty args call
+			Arg("echo").
+			Arg("test").
+			Exec()
+	})
+
+	if err != nil {
+		t.Fatalf("expected command to succeed, but it failed: %v", err)
+	}
+
+	if output != "test" {
+		t.Errorf("expected output 'test', got %q", output)
+	}
+}
+
+func TestArgsWithEmptyCommand(t *testing.T) {
+	ConfigureGlobals()
+
+	// Test Args() when no command is set yet
+	var output string
+	var err error
+
+	captureOutput(func() {
+		output, err = New().
+			Args("echo", "from", "args").
+			Exec()
+	})
+
+	if err != nil {
+		t.Fatalf("expected command to succeed, but it failed: %v", err)
+	}
+
+	expected := "from args"
+	if output != expected {
+		t.Errorf("expected output %q, got %q", expected, output)
+	}
+}
+
+// Test backward compatibility
+func TestLegacyConstructor(t *testing.T) {
+	ConfigureGlobals()
+
+	var output string
+	var err error
+
+	captureOutput(func() {
+		output, err = NewLegacy("echo", "legacy", "test").Exec()
+	})
+
+	if err != nil {
+		t.Fatalf("expected command to succeed, but it failed: %v", err)
+	}
+
+	expected := "legacy test"
+	if output != expected {
+		t.Errorf("expected output %q, got %q", expected, output)
 	}
 }
