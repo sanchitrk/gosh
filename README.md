@@ -228,21 +228,7 @@ The HTTP streaming uses Go's `io.Pipe` for efficient, memory-conscious streaming
 - **Concurrent**: Streaming happens in background goroutines
 - **Clean**: Automatically closes connections when commands complete
 
-## Migration from v1
 
-If you're migrating from the old API:
-
-```go
-// Old way (deprecated)
-gosh.New("ls", "-la")
-
-// New way
-gosh.New().Args("ls", "-la")
-// or
-gosh.New().Command("ls").Arg("-la")
-```
-
-The old constructor is still available as `NewLegacy()` for backward compatibility.
 
 ## Error Handling
 

@@ -58,17 +58,7 @@ func BenchmarkComplexChaining(b *testing.B) {
 	}
 }
 
-func BenchmarkLegacyConstructor(b *testing.B) {
-	ConfigureGlobals()
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := NewLegacy("echo", "legacy", "benchmark").Exec()
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
+
 
 // Benchmark builder creation without execution
 func BenchmarkBuilderCreation(b *testing.B) {

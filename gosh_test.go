@@ -301,23 +301,3 @@ func TestArgsWithEmptyCommand(t *testing.T) {
 	}
 }
 
-// Test backward compatibility
-func TestLegacyConstructor(t *testing.T) {
-	ConfigureGlobals()
-
-	var output string
-	var err error
-
-	captureOutput(func() {
-		output, err = NewLegacy("echo", "legacy", "test").Exec()
-	})
-
-	if err != nil {
-		t.Fatalf("expected command to succeed, but it failed: %v", err)
-	}
-
-	expected := "legacy test"
-	if output != expected {
-		t.Errorf("expected output %q, got %q", expected, output)
-	}
-}

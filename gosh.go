@@ -212,12 +212,58 @@ func (s *Shell) Exec() (string, error) {
 	return stdout, err
 }
 
-// Legacy constructor for backward compatibility
-// Deprecated: Use New().Command(command).Args(args...) instead
-func NewLegacy(command string, args ...string) *Shell {
-	return &Shell{
-		command: command,
-		args:    args,
-		log:     zerolog.New(os.Stdout).With().Timestamp().Logger(),
+// Stream executes the configured command with real-time output streaming.
+// Unlike Exec(), this method pipes stdout and stderr directly to the console
+// as the command runs, providing immediate feedback for long-running commands.
+// Returns an error if the command fails.
+func (s *Shell) Stream() error {
+	if s.command == "" {
+		return fmt.Errorf("no command specified - use Arg() or Command() to set the command")
 	}
+
+	// Clean up HTTP writer when done
+	defer func() {
+		if s.httpWriter != nil {
+			s.httpWriter.Close()
+		}
+	}()
+
+	cmd := exec.Command(s.command, s.args...)
+
+	if s.dir != "" {
+		cmd.Dir = s.dir
+	}
+	if len(s.env) > 0 {
+		cmd.Env = append(os.Environ(), s.env...)
+	}
+
+	// Set up real-time streaming to stdout/stderr and logger
+	var writers []io.Writer
+	
+	// Always include os.Stdout for console output
+	writers = append(writers, os.Stdout)
+	
+	// Add HTTP writer if configured
+	if s.httpWriter != nil {
+		writers = append(writers, s.httpWriter)
+	}
+	
+	// Create multi-writer for stdout
+	stdoutWriter := io.MultiWriter(writers...)
+	
+	// For stderr, we want to write to os.Stderr and HTTP writer (if configured)
+	var stderrWriters []io.Writer
+	stderrWriters = append(stderrWriters, os.Stderr)
+	if s.httpWriter != nil {
+		stderrWriters = append(stderrWriters, s.httpWriter)
+	}
+	stderrWriter := io.MultiWriter(stderrWriters...)
+
+	// Set command output directly to our writers for real-time streaming
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+
+	// Execute the command and wait for completion
+	return cmd.Run()
 }
+
