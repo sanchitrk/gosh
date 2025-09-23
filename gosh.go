@@ -84,6 +84,7 @@ type Shell struct {
 	httpWriter   *HTTPStreamWriter
 	streamingURL string
 	httpHeaders  http.Header
+	logKVs       map[string]string
 }
 
 // New creates a new Shell builder instance.
@@ -173,6 +174,19 @@ func (s *Shell) Env(key, value string) *Shell {
 	return s
 }
 
+func (s *Shell) LogKV(key, value string) *Shell {
+	if s.logKVs == nil {
+		s.logKVs = make(map[string]string)
+	}
+	s.logKVs[key] = value
+	return s
+}
+
+func (s *Shell) ClearLogKV() *Shell {
+	s.logKVs = make(map[string]string)
+	return s
+}
+
 // Logger allows you to inject your own configured zerolog.Logger instance,
 // overriding the library's default logger configuration.
 func (s *Shell) Logger(logger zerolog.Logger) *Shell {
@@ -215,12 +229,20 @@ func (s *Shell) Exec() (string, error) {
 
 	// Always log stderr if present (even on success, some commands write to stderr)
 	if stderr != "" {
-		s.log.Error().Msg(stderr)
+		logEvent := s.log.Error()
+		for k, v := range s.logKVs {
+			logEvent = logEvent.Str(k, v)
+		}
+		logEvent.Msg(stderr)
 	}
 
 	// Always log stdout if present
 	if stdout != "" {
-		s.log.Info().Msg(stdout)
+		logEvent := s.log.Info()
+		for k, v := range s.logKVs {
+			logEvent = logEvent.Str(k, v)
+		}
+		logEvent.Msg(stdout)
 	}
 
 	return stdout, err
@@ -278,7 +300,11 @@ func (s *Shell) Stream() error {
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line != "" {
-				s.log.Info().Msg(line)
+				logEvent := s.log.Info()
+				for k, v := range s.logKVs {
+					logEvent = logEvent.Str(k, v)
+				}
+				logEvent.Msg(line)
 			}
 		}
 	}()
@@ -291,7 +317,11 @@ func (s *Shell) Stream() error {
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line != "" {
-				s.log.Error().Msg(line)
+				logEvent := s.log.Error()
+				for k, v := range s.logKVs {
+					logEvent = logEvent.Str(k, v)
+				}
+				logEvent.Msg(line)
 			}
 		}
 	}()
