@@ -20,7 +20,8 @@ func main() {
 	// Test 1: Exec method with HTTP streaming
 	fmt.Println("1. Testing Exec() method with WithHTTPStream:")
 	_, err := gosh.New().
-		WithHTTPStream("http://localhost:8080/logs").
+		WithHTTPStream("http://localhost:8080/logs/auth").
+		AddHTTPHeader("Token", "_REALLY_SECURE_TOKEN_HERE_").
 		Arg("echo").
 		Arg("Exec method: This should appear in console AND HTTP endpoint").
 		Exec()
@@ -34,7 +35,7 @@ func main() {
 	// Test 2: Exec method with HTTP streaming only
 	fmt.Println("\n2. Testing Exec() method with WithHTTPStreamOnly:")
 	_, err = gosh.New().
-		WithHTTPStreamOnly("http://localhost:8080/logs").
+		WithHTTPStreamOnly("http://localhost:8080/logs/auth").
 		Arg("echo").
 		Arg("Exec method: This should appear ONLY at HTTP endpoint").
 		Exec()
@@ -48,7 +49,8 @@ func main() {
 	// Test 3: Stream method with HTTP streaming
 	fmt.Println("\n3. Testing Stream() method with WithHTTPStream:")
 	err = gosh.New().
-		WithHTTPStream("http://localhost:8080/logs").
+		WithHTTPStream("http://localhost:8080/logs/auth").
+		AddHTTPHeader("Token", "_REALLY_SECURE_TOKEN_STREAM_HERE_").
 		Command("sh").
 		Args("-c", "echo 'Stream method: Line 1'; echo 'Stream method: Line 2'; echo 'Stream method: Line 3'").
 		Stream()
@@ -62,7 +64,7 @@ func main() {
 	// Test 4: Stream method with HTTP streaming only
 	fmt.Println("\n4. Testing Stream() method with WithHTTPStreamOnly:")
 	err = gosh.New().
-		WithHTTPStreamOnly("http://localhost:8080/logs").
+		WithHTTPStreamOnly("http://localhost:8080/logs/auth").
 		Command("sh").
 		Args("-c", "echo 'Stream method ONLY: Line 1'; echo 'Stream method ONLY: Line 2'").
 		Stream()
@@ -76,7 +78,7 @@ func main() {
 	// Test 5: Stream method with error output
 	fmt.Println("\n5. Testing Stream() method with stderr:")
 	err = gosh.New().
-		WithHTTPStream("http://localhost:8080/logs").
+		WithHTTPStream("http://localhost:8080/logs/auth").
 		Command("sh").
 		Args("-c", "echo 'Stream stdout message'; echo 'Stream stderr message' >&2").
 		Stream()

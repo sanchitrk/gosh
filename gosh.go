@@ -25,17 +25,19 @@ func ConfigureGlobals() {
 
 // HTTPStreamWriter implements io.Writer for sending logs to HTTP endpoints
 type HTTPStreamWriter struct {
-	url    string
-	client *http.Client
-	buffer bytes.Buffer
-	mutex  sync.Mutex
+	url     string
+	client  *http.Client
+	buffer  bytes.Buffer
+	mutex   sync.Mutex
+	headers http.Header
 }
 
 // NewHTTPStreamWriter creates a new HTTP stream writer
-func NewHTTPStreamWriter(url string) *HTTPStreamWriter {
+func NewHTTPStreamWriter(url string, headers http.Header) *HTTPStreamWriter {
 	return &HTTPStreamWriter{
-		url:    url,
-		client: &http.Client{Timeout: 10 * time.Second},
+		url:     url,
+		client:  &http.Client{Timeout: 10 * time.Second},
+		headers: headers,
 	}
 }
 
@@ -51,6 +53,11 @@ func (w *HTTPStreamWriter) Write(p []byte) (n int, err error) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		for key, values := range w.headers {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
 
 		resp, err := w.client.Do(req)
 		if err != nil {
@@ -76,13 +83,15 @@ type Shell struct {
 	log          zerolog.Logger
 	httpWriter   *HTTPStreamWriter
 	streamingURL string
+	httpHeaders  http.Header
 }
 
 // New creates a new Shell builder instance.
 // The first call to Arg() will set the command, subsequent calls add arguments.
 func New() *Shell {
 	return &Shell{
-		log: zerolog.New(os.Stdout).With().Timestamp().Logger(),
+		log:         zerolog.New(os.Stdout).With().Timestamp().Logger(),
+		httpHeaders: make(http.Header),
 	}
 }
 
@@ -90,7 +99,7 @@ func New() *Shell {
 // This uses io.Pipe for efficient streaming of logs to the HTTP endpoint.
 func (s *Shell) WithHTTPStream(url string) *Shell {
 	s.streamingURL = url
-	s.httpWriter = NewHTTPStreamWriter(url)
+	s.httpWriter = NewHTTPStreamWriter(url, s.httpHeaders)
 
 	// Create a multi-writer to send logs both to stdout and HTTP endpoint
 	multiWriter := io.MultiWriter(os.Stdout, s.httpWriter)
@@ -103,8 +112,14 @@ func (s *Shell) WithHTTPStream(url string) *Shell {
 // This sends logs exclusively to the HTTP endpoint without local stdout output.
 func (s *Shell) WithHTTPStreamOnly(url string) *Shell {
 	s.streamingURL = url
-	s.httpWriter = NewHTTPStreamWriter(url)
+	s.httpWriter = NewHTTPStreamWriter(url, s.httpHeaders)
 	s.log = zerolog.New(s.httpWriter).With().Timestamp().Logger()
+	return s
+}
+
+// AddHTTPHeader adds a header to be sent with HTTP stream requests.
+func (s *Shell) AddHTTPHeader(key, value string) *Shell {
+	s.httpHeaders.Add(key, value)
 	return s
 }
 
