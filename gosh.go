@@ -1,6 +1,7 @@
 package gosh
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -42,7 +43,7 @@ func NewHTTPStreamWriter(url string) *HTTPStreamWriter {
 func (w *HTTPStreamWriter) Write(p []byte) (n int, err error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
-	
+
 	// Send immediately to HTTP endpoint
 	go func() {
 		req, err := http.NewRequest("POST", w.url, bytes.NewBuffer(p))
@@ -50,14 +51,14 @@ func (w *HTTPStreamWriter) Write(p []byte) (n int, err error) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		resp, err := w.client.Do(req)
 		if err != nil {
 			return
 		}
 		defer resp.Body.Close()
 	}()
-	
+
 	return len(p), nil
 }
 
@@ -90,11 +91,11 @@ func New() *Shell {
 func (s *Shell) WithHTTPStream(url string) *Shell {
 	s.streamingURL = url
 	s.httpWriter = NewHTTPStreamWriter(url)
-	
+
 	// Create a multi-writer to send logs both to stdout and HTTP endpoint
 	multiWriter := io.MultiWriter(os.Stdout, s.httpWriter)
 	s.log = zerolog.New(multiWriter).With().Timestamp().Logger()
-	
+
 	return s
 }
 
@@ -124,7 +125,7 @@ func (s *Shell) Args(args ...string) *Shell {
 	if len(args) == 0 {
 		return s
 	}
-	
+
 	if s.command == "" && len(args) > 0 {
 		s.command = args[0]
 		if len(args) > 1 {
@@ -192,8 +193,6 @@ func (s *Shell) Exec() (string, error) {
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-
-
 	err := cmd.Run()
 
 	stdout := strings.TrimSpace(stdoutBuf.String())
@@ -213,8 +212,8 @@ func (s *Shell) Exec() (string, error) {
 }
 
 // Stream executes the configured command with real-time output streaming.
-// Unlike Exec(), this method pipes stdout and stderr directly to the console
-// as the command runs, providing immediate feedback for long-running commands.
+// Unlike Exec(), this method streams stdout and stderr in real-time through
+// zerolog, preserving the configured formatting and HTTP streaming settings.
 // Returns an error if the command fails.
 func (s *Shell) Stream() error {
 	if s.command == "" {
@@ -237,33 +236,54 @@ func (s *Shell) Stream() error {
 		cmd.Env = append(os.Environ(), s.env...)
 	}
 
-	// Set up real-time streaming to stdout/stderr and logger
-	var writers []io.Writer
-	
-	// Always include os.Stdout for console output
-	writers = append(writers, os.Stdout)
-	
-	// Add HTTP writer if configured
-	if s.httpWriter != nil {
-		writers = append(writers, s.httpWriter)
+	// Create pipes for real-time streaming
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
-	
-	// Create multi-writer for stdout
-	stdoutWriter := io.MultiWriter(writers...)
-	
-	// For stderr, we want to write to os.Stderr and HTTP writer (if configured)
-	var stderrWriters []io.Writer
-	stderrWriters = append(stderrWriters, os.Stderr)
-	if s.httpWriter != nil {
-		stderrWriters = append(stderrWriters, s.httpWriter)
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
-	stderrWriter := io.MultiWriter(stderrWriters...)
 
-	// Set command output directly to our writers for real-time streaming
-	cmd.Stdout = stdoutWriter
-	cmd.Stderr = stderrWriter
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
 
-	// Execute the command and wait for completion
-	return cmd.Run()
+	// Use WaitGroup to handle concurrent streaming
+	var wg sync.WaitGroup
+
+	// Stream stdout through zerolog as info messages
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line != "" {
+				s.log.Info().Msg(line)
+			}
+		}
+	}()
+
+	// Stream stderr through zerolog as error messages
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line != "" {
+				s.log.Error().Msg(line)
+			}
+		}
+	}()
+
+	// Wait for all streaming to complete
+	wg.Wait()
+
+	// Wait for the command to complete and return its error status
+	return cmd.Wait()
 }
-
