@@ -30,13 +30,14 @@ type HTTPStreamWriter struct {
 	buffer  bytes.Buffer
 	mutex   sync.Mutex
 	headers http.Header
+	wg      sync.WaitGroup
 }
 
 // NewHTTPStreamWriter creates a new HTTP stream writer
 func NewHTTPStreamWriter(url string, headers http.Header) *HTTPStreamWriter {
 	return &HTTPStreamWriter{
 		url:     url,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  &http.Client{Timeout: 30 * time.Second}, // Increased timeout
 		headers: headers,
 	}
 }
@@ -46,31 +47,94 @@ func (w *HTTPStreamWriter) Write(p []byte) (n int, err error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	// Send immediately to HTTP endpoint
-	go func() {
-		req, err := http.NewRequest("POST", w.url, bytes.NewBuffer(p))
+	// Add incoming data to buffer
+	w.buffer.Write(p)
+
+	// Process complete lines (JSON objects end with newlines)
+	for {
+		line, err := w.buffer.ReadBytes('\n')
 		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		for key, values := range w.headers {
-			for _, value := range values {
-				req.Header.Add(key, value)
-			}
+			// No complete line available, put data back and break
+			w.buffer.Write(line)
+			break
 		}
 
-		resp, err := w.client.Do(req)
-		if err != nil {
-			return
-		}
-		defer resp.Body.Close()
-	}()
+		// Send complete line to HTTP endpoint
+		w.wg.Add(1)
+		go func(data []byte) {
+			defer w.wg.Done()
+
+			// Console log the payload being sent
+			// fmt.Printf("HTTP Stream Payload: %s", string(data))
+
+			req, err := http.NewRequest("POST", w.url, bytes.NewBuffer(data))
+			if err != nil {
+				fmt.Printf("HTTP Stream Error creating request: %v\n", err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			for key, values := range w.headers {
+				for _, value := range values {
+					req.Header.Add(key, value)
+				}
+			}
+
+			resp, err := w.client.Do(req)
+			if err != nil {
+				fmt.Printf("HTTP Stream Error sending request: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode >= 400 {
+				fmt.Printf("HTTP Stream Error response status: %s\n", resp.Status)
+			}
+		}(line)
+	}
 
 	return len(p), nil
 }
 
-// Close closes the writer (no-op for this implementation)
+// Close closes the writer and waits for all HTTP requests to complete
 func (w *HTTPStreamWriter) Close() error {
+	// Send any remaining buffered data
+	w.mutex.Lock()
+	if w.buffer.Len() > 0 {
+		remaining := w.buffer.Bytes()
+		w.buffer.Reset()
+		w.mutex.Unlock()
+
+		// Send remaining data if any
+		w.wg.Add(1)
+		go func(data []byte) {
+			defer w.wg.Done()
+			fmt.Printf("HTTP Stream Final Payload: %s", string(data))
+
+			req, err := http.NewRequest("POST", w.url, bytes.NewBuffer(data))
+			if err != nil {
+				fmt.Printf("HTTP Stream Error creating final request: %v\n", err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			for key, values := range w.headers {
+				for _, value := range values {
+					req.Header.Add(key, value)
+				}
+			}
+
+			resp, err := w.client.Do(req)
+			if err != nil {
+				fmt.Printf("HTTP Stream Error sending final request: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+		}(remaining)
+	} else {
+		w.mutex.Unlock()
+	}
+
+	// Wait for all HTTP requests to complete
+	w.wg.Wait()
 	return nil
 }
 
